@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.1)
+cmake_minimum_required(VERSION 3.5)
 
 project(sylvan VERSION 1.5.0)
 
@@ -50,6 +50,7 @@ if(WITH_COVERAGE)
 endif()
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/src)
+include_directories(/opt/homebrew/include)
 include(GNUInstallDirs)
 include(CTest)
 
