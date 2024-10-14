@@ -1137,7 +1137,7 @@ lace_exec_in_new_frame(WorkerP *__lace_worker, Task *__lace_dq_head, Task *root)
 
     // execute task
     root->f(__lace_worker, __lace_dq_head, root);
-    compiler_barrier();
+    smp_rmb_barrier();
 
     // wait until all workers are back (else they may steal from previous frame)
     lace_barrier();

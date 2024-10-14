@@ -316,22 +316,25 @@ void lace_yield(WorkerP *__lace_worker, Task *__lace_dq_head);
 #define LACE_TASKSIZE (6)*P_SZ
 #endif
 
-/* Some fences */
-#ifndef compiler_barrier
-#ifdef __aarch64__
-#define compiler_barrier() { asm volatile("dmb ishld" ::: "memory"); }
-#else
 #define compiler_barrier() { asm volatile("" ::: "memory"); }
-#endif
+
+/* Some fences */
+#ifdef __aarch64__
+#define smp_rmb_barrier() { asm volatile("dmb ishld" ::: "memory"); }
+#define smp_wmb_barrier() { asm volatile("dmb ishst" ::: "memory"); }
+#define smp_mb_barrier() { asm volatile("dmb ish" ::: "memory"); }
+#define mb_barrier() { asm volatile("dsb sy" ::: "memory"); }
+#elif defined(__x86_64__)
+#define smp_rmb_barrier() { asm volatile("" ::: "memory"); }
+#define smp_wmb_barrier() { asm volatile("" ::: "memory"); }
+#define smp_mb_barrier() { asm volatile("lock addl $0, -128(%%rsp); " ::: "memory"); }
+#define mb_barrier() { asm volatile("mfence" ::: "memory"); }
+#else
+#error "Architecture not supported"
 #endif
 
-#ifndef mfence
-#ifdef __aarch64__
-#define mfence() { asm volatile("dsb sy" ::: "memory"); }
-#else
-#define mfence() { asm volatile("mfence" ::: "memory"); }
-#endif
-#endif
+#define mfence() mb_barrier()
+
 
 /* Compiler specific branch prediction optimization */
 #ifndef likely
@@ -711,13 +714,13 @@ lace_leapfrog(WorkerP *__lace_worker, Task *__lace_dq_head)
             } else if (res == LACE_BUSY) {
                 PR_COUNTSTEALS(__lace_worker, CTR_leap_busy);
             }
-            compiler_barrier();
+            smp_rmb_barrier();
             thief = t->thief;
         }
 
         /* POST-LEAP: really pop the finished task */
         /*            no need to decrease __lace_dq_head, since it is a local variable */
-        compiler_barrier();
+        smp_rmb_barrier();
         if (__lace_worker->allstolen == 0) {
             /* Assume: tail = split = head (pre-pop) */
             /* Now we do a real pop ergo either decrease tail,split,head or declare allstolen */
@@ -727,7 +730,7 @@ lace_leapfrog(WorkerP *__lace_worker, Task *__lace_dq_head)
         }
     }
 
-    compiler_barrier();
+    smp_rmb_barrier();
     t->thief = THIEF_EMPTY;
     lace_time_event(__lace_worker, 4);
 }
@@ -783,7 +786,7 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head )                                 
     t->f = &NAME##_WRAP;                                                              \
     t->thief = THIEF_TASK;                                                            \
                                                                                       \
-    compiler_barrier();                                                               \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     Worker *wt = w->_public;                                                          \
     if (unlikely(w->allstolen)) {                                                     \
@@ -791,7 +794,7 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head )                                 
         head = __dq_head - w->dq;                                                     \
         ts = (TailSplit){{head,head+1}};                                              \
         wt->ts.v = ts.v;                                                              \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->allstolen = 0;                                                            \
         w->split = __dq_head+1;                                                       \
         w->allstolen = 0;                                                             \
@@ -801,7 +804,7 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head )                                 
         newsplit = (split + head + 2)/2;                                              \
         wt->ts.ts.split = newsplit;                                                   \
         w->split = w->dq + newsplit;                                                  \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->movesplit = 0;                                                            \
         PR_COUNTSPLITS(w, CTR_split_grow);                                            \
     }                                                                                 \
@@ -843,7 +846,7 @@ RTYPE NAME##_SYNC_SLOW(WorkerP *w, Task *__dq_head)                             
         return ((TD_##NAME *)t)->d.res;                                               \
     }                                                                                 \
                                                                                       \
-    compiler_barrier();                                                               \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     Worker *wt = w->_public;                                                          \
     if (wt->movesplit) {                                                              \
@@ -852,12 +855,12 @@ RTYPE NAME##_SYNC_SLOW(WorkerP *w, Task *__dq_head)                             
         diff = (diff + 1) / 2;                                                        \
         w->split = t + diff;                                                          \
         wt->ts.ts.split += diff;                                                      \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->movesplit = 0;                                                            \
         PR_COUNTSPLITS(w, CTR_split_grow);                                            \
     }                                                                                 \
                                                                                       \
-    compiler_barrier();                                                               \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     t = (TD_##NAME *)__dq_head;                                                       \
     t->thief = THIEF_EMPTY;                                                           \
@@ -933,7 +936,7 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head )                                 
     t->f = &NAME##_WRAP;                                                              \
     t->thief = THIEF_TASK;                                                            \
                                                                                       \
-    compiler_barrier();                                                               \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     Worker *wt = w->_public;                                                          \
     if (unlikely(w->allstolen)) {                                                     \
@@ -941,7 +944,7 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head )                                 
         head = __dq_head - w->dq;                                                     \
         ts = (TailSplit){{head,head+1}};                                              \
         wt->ts.v = ts.v;                                                              \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->allstolen = 0;                                                            \
         w->split = __dq_head+1;                                                       \
         w->allstolen = 0;                                                             \
@@ -951,7 +954,7 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head )                                 
         newsplit = (split + head + 2)/2;                                              \
         wt->ts.ts.split = newsplit;                                                   \
         w->split = w->dq + newsplit;                                                  \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->movesplit = 0;                                                            \
         PR_COUNTSPLITS(w, CTR_split_grow);                                            \
     }                                                                                 \
@@ -993,7 +996,7 @@ void NAME##_SYNC_SLOW(WorkerP *w, Task *__dq_head)                              
         return ;                                                                      \
     }                                                                                 \
                                                                                       \
-    compiler_barrier();                                                               \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     Worker *wt = w->_public;                                                          \
     if (wt->movesplit) {                                                              \
@@ -1002,12 +1005,12 @@ void NAME##_SYNC_SLOW(WorkerP *w, Task *__dq_head)                              
         diff = (diff + 1) / 2;                                                        \
         w->split = t + diff;                                                          \
         wt->ts.ts.split += diff;                                                      \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->movesplit = 0;                                                            \
         PR_COUNTSPLITS(w, CTR_split_grow);                                            \
     }                                                                                 \
                                                                                       \
-    compiler_barrier();                                                               \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     t = (TD_##NAME *)__dq_head;                                                       \
     t->thief = THIEF_EMPTY;                                                           \
@@ -1086,7 +1089,7 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head , ATYPE_1 arg_1)                  
     t->f = &NAME##_WRAP;                                                              \
     t->thief = THIEF_TASK;                                                            \
      t->d.args.arg_1 = arg_1;                                                         \
-    compiler_barrier();                                                               \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     Worker *wt = w->_public;                                                          \
     if (unlikely(w->allstolen)) {                                                     \
@@ -1094,7 +1097,7 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head , ATYPE_1 arg_1)                  
         head = __dq_head - w->dq;                                                     \
         ts = (TailSplit){{head,head+1}};                                              \
         wt->ts.v = ts.v;                                                              \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->allstolen = 0;                                                            \
         w->split = __dq_head+1;                                                       \
         w->allstolen = 0;                                                             \
@@ -1104,7 +1107,7 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head , ATYPE_1 arg_1)                  
         newsplit = (split + head + 2)/2;                                              \
         wt->ts.ts.split = newsplit;                                                   \
         w->split = w->dq + newsplit;                                                  \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->movesplit = 0;                                                            \
         PR_COUNTSPLITS(w, CTR_split_grow);                                            \
     }                                                                                 \
@@ -1146,7 +1149,7 @@ RTYPE NAME##_SYNC_SLOW(WorkerP *w, Task *__dq_head)                             
         return ((TD_##NAME *)t)->d.res;                                               \
     }                                                                                 \
                                                                                       \
-    compiler_barrier();                                                               \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     Worker *wt = w->_public;                                                          \
     if (wt->movesplit) {                                                              \
@@ -1155,12 +1158,12 @@ RTYPE NAME##_SYNC_SLOW(WorkerP *w, Task *__dq_head)                             
         diff = (diff + 1) / 2;                                                        \
         w->split = t + diff;                                                          \
         wt->ts.ts.split += diff;                                                      \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->movesplit = 0;                                                            \
         PR_COUNTSPLITS(w, CTR_split_grow);                                            \
     }                                                                                 \
                                                                                       \
-    compiler_barrier();                                                               \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     t = (TD_##NAME *)__dq_head;                                                       \
     t->thief = THIEF_EMPTY;                                                           \
@@ -1235,8 +1238,8 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head , ATYPE_1 arg_1)                  
     t = (TD_##NAME *)__dq_head;                                                       \
     t->f = &NAME##_WRAP;                                                              \
     t->thief = THIEF_TASK;                                                            \
-     t->d.args.arg_1 = arg_1;                                                         \
-    compiler_barrier();                                                               \
+    t->d.args.arg_1 = arg_1;                                                         \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     Worker *wt = w->_public;                                                          \
     if (unlikely(w->allstolen)) {                                                     \
@@ -1244,7 +1247,7 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head , ATYPE_1 arg_1)                  
         head = __dq_head - w->dq;                                                     \
         ts = (TailSplit){{head,head+1}};                                              \
         wt->ts.v = ts.v;                                                              \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->allstolen = 0;                                                            \
         w->split = __dq_head+1;                                                       \
         w->allstolen = 0;                                                             \
@@ -1254,7 +1257,7 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head , ATYPE_1 arg_1)                  
         newsplit = (split + head + 2)/2;                                              \
         wt->ts.ts.split = newsplit;                                                   \
         w->split = w->dq + newsplit;                                                  \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->movesplit = 0;                                                            \
         PR_COUNTSPLITS(w, CTR_split_grow);                                            \
     }                                                                                 \
@@ -1296,7 +1299,7 @@ void NAME##_SYNC_SLOW(WorkerP *w, Task *__dq_head)                              
         return ;                                                                      \
     }                                                                                 \
                                                                                       \
-    compiler_barrier();                                                               \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     Worker *wt = w->_public;                                                          \
     if (wt->movesplit) {                                                              \
@@ -1305,12 +1308,12 @@ void NAME##_SYNC_SLOW(WorkerP *w, Task *__dq_head)                              
         diff = (diff + 1) / 2;                                                        \
         w->split = t + diff;                                                          \
         wt->ts.ts.split += diff;                                                      \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->movesplit = 0;                                                            \
         PR_COUNTSPLITS(w, CTR_split_grow);                                            \
     }                                                                                 \
                                                                                       \
-    compiler_barrier();                                                               \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     t = (TD_##NAME *)__dq_head;                                                       \
     t->thief = THIEF_EMPTY;                                                           \
@@ -1389,7 +1392,7 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head , ATYPE_1 arg_1, ATYPE_2 arg_2)   
     t->f = &NAME##_WRAP;                                                              \
     t->thief = THIEF_TASK;                                                            \
      t->d.args.arg_1 = arg_1; t->d.args.arg_2 = arg_2;                                \
-    compiler_barrier();                                                               \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     Worker *wt = w->_public;                                                          \
     if (unlikely(w->allstolen)) {                                                     \
@@ -1397,7 +1400,7 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head , ATYPE_1 arg_1, ATYPE_2 arg_2)   
         head = __dq_head - w->dq;                                                     \
         ts = (TailSplit){{head,head+1}};                                              \
         wt->ts.v = ts.v;                                                              \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->allstolen = 0;                                                            \
         w->split = __dq_head+1;                                                       \
         w->allstolen = 0;                                                             \
@@ -1407,7 +1410,7 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head , ATYPE_1 arg_1, ATYPE_2 arg_2)   
         newsplit = (split + head + 2)/2;                                              \
         wt->ts.ts.split = newsplit;                                                   \
         w->split = w->dq + newsplit;                                                  \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->movesplit = 0;                                                            \
         PR_COUNTSPLITS(w, CTR_split_grow);                                            \
     }                                                                                 \
@@ -1449,7 +1452,7 @@ RTYPE NAME##_SYNC_SLOW(WorkerP *w, Task *__dq_head)                             
         return ((TD_##NAME *)t)->d.res;                                               \
     }                                                                                 \
                                                                                       \
-    compiler_barrier();                                                               \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     Worker *wt = w->_public;                                                          \
     if (wt->movesplit) {                                                              \
@@ -1458,12 +1461,12 @@ RTYPE NAME##_SYNC_SLOW(WorkerP *w, Task *__dq_head)                             
         diff = (diff + 1) / 2;                                                        \
         w->split = t + diff;                                                          \
         wt->ts.ts.split += diff;                                                      \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->movesplit = 0;                                                            \
         PR_COUNTSPLITS(w, CTR_split_grow);                                            \
     }                                                                                 \
                                                                                       \
-    compiler_barrier();                                                               \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     t = (TD_##NAME *)__dq_head;                                                       \
     t->thief = THIEF_EMPTY;                                                           \
@@ -1539,7 +1542,7 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head , ATYPE_1 arg_1, ATYPE_2 arg_2)   
     t->f = &NAME##_WRAP;                                                              \
     t->thief = THIEF_TASK;                                                            \
      t->d.args.arg_1 = arg_1; t->d.args.arg_2 = arg_2;                                \
-    compiler_barrier();                                                               \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     Worker *wt = w->_public;                                                          \
     if (unlikely(w->allstolen)) {                                                     \
@@ -1547,7 +1550,7 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head , ATYPE_1 arg_1, ATYPE_2 arg_2)   
         head = __dq_head - w->dq;                                                     \
         ts = (TailSplit){{head,head+1}};                                              \
         wt->ts.v = ts.v;                                                              \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->allstolen = 0;                                                            \
         w->split = __dq_head+1;                                                       \
         w->allstolen = 0;                                                             \
@@ -1557,7 +1560,7 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head , ATYPE_1 arg_1, ATYPE_2 arg_2)   
         newsplit = (split + head + 2)/2;                                              \
         wt->ts.ts.split = newsplit;                                                   \
         w->split = w->dq + newsplit;                                                  \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->movesplit = 0;                                                            \
         PR_COUNTSPLITS(w, CTR_split_grow);                                            \
     }                                                                                 \
@@ -1599,7 +1602,7 @@ void NAME##_SYNC_SLOW(WorkerP *w, Task *__dq_head)                              
         return ;                                                                      \
     }                                                                                 \
                                                                                       \
-    compiler_barrier();                                                               \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     Worker *wt = w->_public;                                                          \
     if (wt->movesplit) {                                                              \
@@ -1608,12 +1611,12 @@ void NAME##_SYNC_SLOW(WorkerP *w, Task *__dq_head)                              
         diff = (diff + 1) / 2;                                                        \
         w->split = t + diff;                                                          \
         wt->ts.ts.split += diff;                                                      \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->movesplit = 0;                                                            \
         PR_COUNTSPLITS(w, CTR_split_grow);                                            \
     }                                                                                 \
                                                                                       \
-    compiler_barrier();                                                               \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     t = (TD_##NAME *)__dq_head;                                                       \
     t->thief = THIEF_EMPTY;                                                           \
@@ -1691,8 +1694,8 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head , ATYPE_1 arg_1, ATYPE_2 arg_2, AT
     t = (TD_##NAME *)__dq_head;                                                       \
     t->f = &NAME##_WRAP;                                                              \
     t->thief = THIEF_TASK;                                                            \
-     t->d.args.arg_1 = arg_1; t->d.args.arg_2 = arg_2; t->d.args.arg_3 = arg_3;       \
-    compiler_barrier();                                                               \
+    t->d.args.arg_1 = arg_1; t->d.args.arg_2 = arg_2; t->d.args.arg_3 = arg_3;       \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     Worker *wt = w->_public;                                                          \
     if (unlikely(w->allstolen)) {                                                     \
@@ -1700,7 +1703,7 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head , ATYPE_1 arg_1, ATYPE_2 arg_2, AT
         head = __dq_head - w->dq;                                                     \
         ts = (TailSplit){{head,head+1}};                                              \
         wt->ts.v = ts.v;                                                              \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->allstolen = 0;                                                            \
         w->split = __dq_head+1;                                                       \
         w->allstolen = 0;                                                             \
@@ -1710,7 +1713,7 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head , ATYPE_1 arg_1, ATYPE_2 arg_2, AT
         newsplit = (split + head + 2)/2;                                              \
         wt->ts.ts.split = newsplit;                                                   \
         w->split = w->dq + newsplit;                                                  \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->movesplit = 0;                                                            \
         PR_COUNTSPLITS(w, CTR_split_grow);                                            \
     }                                                                                 \
@@ -1752,7 +1755,7 @@ RTYPE NAME##_SYNC_SLOW(WorkerP *w, Task *__dq_head)                             
         return ((TD_##NAME *)t)->d.res;                                               \
     }                                                                                 \
                                                                                       \
-    compiler_barrier();                                                               \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     Worker *wt = w->_public;                                                          \
     if (wt->movesplit) {                                                              \
@@ -1761,12 +1764,12 @@ RTYPE NAME##_SYNC_SLOW(WorkerP *w, Task *__dq_head)                             
         diff = (diff + 1) / 2;                                                        \
         w->split = t + diff;                                                          \
         wt->ts.ts.split += diff;                                                      \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->movesplit = 0;                                                            \
         PR_COUNTSPLITS(w, CTR_split_grow);                                            \
     }                                                                                 \
                                                                                       \
-    compiler_barrier();                                                               \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     t = (TD_##NAME *)__dq_head;                                                       \
     t->thief = THIEF_EMPTY;                                                           \
@@ -1842,7 +1845,7 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head , ATYPE_1 arg_1, ATYPE_2 arg_2, AT
     t->f = &NAME##_WRAP;                                                              \
     t->thief = THIEF_TASK;                                                            \
      t->d.args.arg_1 = arg_1; t->d.args.arg_2 = arg_2; t->d.args.arg_3 = arg_3;       \
-    compiler_barrier();                                                               \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     Worker *wt = w->_public;                                                          \
     if (unlikely(w->allstolen)) {                                                     \
@@ -1850,7 +1853,7 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head , ATYPE_1 arg_1, ATYPE_2 arg_2, AT
         head = __dq_head - w->dq;                                                     \
         ts = (TailSplit){{head,head+1}};                                              \
         wt->ts.v = ts.v;                                                              \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->allstolen = 0;                                                            \
         w->split = __dq_head+1;                                                       \
         w->allstolen = 0;                                                             \
@@ -1860,7 +1863,7 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head , ATYPE_1 arg_1, ATYPE_2 arg_2, AT
         newsplit = (split + head + 2)/2;                                              \
         wt->ts.ts.split = newsplit;                                                   \
         w->split = w->dq + newsplit;                                                  \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->movesplit = 0;                                                            \
         PR_COUNTSPLITS(w, CTR_split_grow);                                            \
     }                                                                                 \
@@ -1902,7 +1905,7 @@ void NAME##_SYNC_SLOW(WorkerP *w, Task *__dq_head)                              
         return ;                                                                      \
     }                                                                                 \
                                                                                       \
-    compiler_barrier();                                                               \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     Worker *wt = w->_public;                                                          \
     if (wt->movesplit) {                                                              \
@@ -1911,12 +1914,12 @@ void NAME##_SYNC_SLOW(WorkerP *w, Task *__dq_head)                              
         diff = (diff + 1) / 2;                                                        \
         w->split = t + diff;                                                          \
         wt->ts.ts.split += diff;                                                      \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->movesplit = 0;                                                            \
         PR_COUNTSPLITS(w, CTR_split_grow);                                            \
     }                                                                                 \
                                                                                       \
-    compiler_barrier();                                                               \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     t = (TD_##NAME *)__dq_head;                                                       \
     t->thief = THIEF_EMPTY;                                                           \
@@ -1995,7 +1998,7 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head , ATYPE_1 arg_1, ATYPE_2 arg_2, AT
     t->f = &NAME##_WRAP;                                                              \
     t->thief = THIEF_TASK;                                                            \
      t->d.args.arg_1 = arg_1; t->d.args.arg_2 = arg_2; t->d.args.arg_3 = arg_3; t->d.args.arg_4 = arg_4;\
-    compiler_barrier();                                                               \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     Worker *wt = w->_public;                                                          \
     if (unlikely(w->allstolen)) {                                                     \
@@ -2003,7 +2006,7 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head , ATYPE_1 arg_1, ATYPE_2 arg_2, AT
         head = __dq_head - w->dq;                                                     \
         ts = (TailSplit){{head,head+1}};                                              \
         wt->ts.v = ts.v;                                                              \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->allstolen = 0;                                                            \
         w->split = __dq_head+1;                                                       \
         w->allstolen = 0;                                                             \
@@ -2013,7 +2016,7 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head , ATYPE_1 arg_1, ATYPE_2 arg_2, AT
         newsplit = (split + head + 2)/2;                                              \
         wt->ts.ts.split = newsplit;                                                   \
         w->split = w->dq + newsplit;                                                  \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->movesplit = 0;                                                            \
         PR_COUNTSPLITS(w, CTR_split_grow);                                            \
     }                                                                                 \
@@ -2055,7 +2058,7 @@ RTYPE NAME##_SYNC_SLOW(WorkerP *w, Task *__dq_head)                             
         return ((TD_##NAME *)t)->d.res;                                               \
     }                                                                                 \
                                                                                       \
-    compiler_barrier();                                                               \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     Worker *wt = w->_public;                                                          \
     if (wt->movesplit) {                                                              \
@@ -2064,12 +2067,12 @@ RTYPE NAME##_SYNC_SLOW(WorkerP *w, Task *__dq_head)                             
         diff = (diff + 1) / 2;                                                        \
         w->split = t + diff;                                                          \
         wt->ts.ts.split += diff;                                                      \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->movesplit = 0;                                                            \
         PR_COUNTSPLITS(w, CTR_split_grow);                                            \
     }                                                                                 \
                                                                                       \
-    compiler_barrier();                                                               \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     t = (TD_##NAME *)__dq_head;                                                       \
     t->thief = THIEF_EMPTY;                                                           \
@@ -2145,7 +2148,7 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head , ATYPE_1 arg_1, ATYPE_2 arg_2, AT
     t->f = &NAME##_WRAP;                                                              \
     t->thief = THIEF_TASK;                                                            \
      t->d.args.arg_1 = arg_1; t->d.args.arg_2 = arg_2; t->d.args.arg_3 = arg_3; t->d.args.arg_4 = arg_4;\
-    compiler_barrier();                                                               \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     Worker *wt = w->_public;                                                          \
     if (unlikely(w->allstolen)) {                                                     \
@@ -2153,7 +2156,7 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head , ATYPE_1 arg_1, ATYPE_2 arg_2, AT
         head = __dq_head - w->dq;                                                     \
         ts = (TailSplit){{head,head+1}};                                              \
         wt->ts.v = ts.v;                                                              \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->allstolen = 0;                                                            \
         w->split = __dq_head+1;                                                       \
         w->allstolen = 0;                                                             \
@@ -2163,7 +2166,7 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head , ATYPE_1 arg_1, ATYPE_2 arg_2, AT
         newsplit = (split + head + 2)/2;                                              \
         wt->ts.ts.split = newsplit;                                                   \
         w->split = w->dq + newsplit;                                                  \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->movesplit = 0;                                                            \
         PR_COUNTSPLITS(w, CTR_split_grow);                                            \
     }                                                                                 \
@@ -2205,7 +2208,7 @@ void NAME##_SYNC_SLOW(WorkerP *w, Task *__dq_head)                              
         return ;                                                                      \
     }                                                                                 \
                                                                                       \
-    compiler_barrier();                                                               \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     Worker *wt = w->_public;                                                          \
     if (wt->movesplit) {                                                              \
@@ -2214,12 +2217,12 @@ void NAME##_SYNC_SLOW(WorkerP *w, Task *__dq_head)                              
         diff = (diff + 1) / 2;                                                        \
         w->split = t + diff;                                                          \
         wt->ts.ts.split += diff;                                                      \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->movesplit = 0;                                                            \
         PR_COUNTSPLITS(w, CTR_split_grow);                                            \
     }                                                                                 \
                                                                                       \
-    compiler_barrier();                                                               \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     t = (TD_##NAME *)__dq_head;                                                       \
     t->thief = THIEF_EMPTY;                                                           \
@@ -2298,7 +2301,7 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head , ATYPE_1 arg_1, ATYPE_2 arg_2, AT
     t->f = &NAME##_WRAP;                                                              \
     t->thief = THIEF_TASK;                                                            \
      t->d.args.arg_1 = arg_1; t->d.args.arg_2 = arg_2; t->d.args.arg_3 = arg_3; t->d.args.arg_4 = arg_4; t->d.args.arg_5 = arg_5;\
-    compiler_barrier();                                                               \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     Worker *wt = w->_public;                                                          \
     if (unlikely(w->allstolen)) {                                                     \
@@ -2306,7 +2309,7 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head , ATYPE_1 arg_1, ATYPE_2 arg_2, AT
         head = __dq_head - w->dq;                                                     \
         ts = (TailSplit){{head,head+1}};                                              \
         wt->ts.v = ts.v;                                                              \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->allstolen = 0;                                                            \
         w->split = __dq_head+1;                                                       \
         w->allstolen = 0;                                                             \
@@ -2316,7 +2319,7 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head , ATYPE_1 arg_1, ATYPE_2 arg_2, AT
         newsplit = (split + head + 2)/2;                                              \
         wt->ts.ts.split = newsplit;                                                   \
         w->split = w->dq + newsplit;                                                  \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->movesplit = 0;                                                            \
         PR_COUNTSPLITS(w, CTR_split_grow);                                            \
     }                                                                                 \
@@ -2358,7 +2361,7 @@ RTYPE NAME##_SYNC_SLOW(WorkerP *w, Task *__dq_head)                             
         return ((TD_##NAME *)t)->d.res;                                               \
     }                                                                                 \
                                                                                       \
-    compiler_barrier();                                                               \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     Worker *wt = w->_public;                                                          \
     if (wt->movesplit) {                                                              \
@@ -2367,12 +2370,12 @@ RTYPE NAME##_SYNC_SLOW(WorkerP *w, Task *__dq_head)                             
         diff = (diff + 1) / 2;                                                        \
         w->split = t + diff;                                                          \
         wt->ts.ts.split += diff;                                                      \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->movesplit = 0;                                                            \
         PR_COUNTSPLITS(w, CTR_split_grow);                                            \
     }                                                                                 \
                                                                                       \
-    compiler_barrier();                                                               \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     t = (TD_##NAME *)__dq_head;                                                       \
     t->thief = THIEF_EMPTY;                                                           \
@@ -2448,7 +2451,7 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head , ATYPE_1 arg_1, ATYPE_2 arg_2, AT
     t->f = &NAME##_WRAP;                                                              \
     t->thief = THIEF_TASK;                                                            \
      t->d.args.arg_1 = arg_1; t->d.args.arg_2 = arg_2; t->d.args.arg_3 = arg_3; t->d.args.arg_4 = arg_4; t->d.args.arg_5 = arg_5;\
-    compiler_barrier();                                                               \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     Worker *wt = w->_public;                                                          \
     if (unlikely(w->allstolen)) {                                                     \
@@ -2456,7 +2459,7 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head , ATYPE_1 arg_1, ATYPE_2 arg_2, AT
         head = __dq_head - w->dq;                                                     \
         ts = (TailSplit){{head,head+1}};                                              \
         wt->ts.v = ts.v;                                                              \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->allstolen = 0;                                                            \
         w->split = __dq_head+1;                                                       \
         w->allstolen = 0;                                                             \
@@ -2466,7 +2469,7 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head , ATYPE_1 arg_1, ATYPE_2 arg_2, AT
         newsplit = (split + head + 2)/2;                                              \
         wt->ts.ts.split = newsplit;                                                   \
         w->split = w->dq + newsplit;                                                  \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->movesplit = 0;                                                            \
         PR_COUNTSPLITS(w, CTR_split_grow);                                            \
     }                                                                                 \
@@ -2508,7 +2511,7 @@ void NAME##_SYNC_SLOW(WorkerP *w, Task *__dq_head)                              
         return ;                                                                      \
     }                                                                                 \
                                                                                       \
-    compiler_barrier();                                                               \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     Worker *wt = w->_public;                                                          \
     if (wt->movesplit) {                                                              \
@@ -2517,12 +2520,12 @@ void NAME##_SYNC_SLOW(WorkerP *w, Task *__dq_head)                              
         diff = (diff + 1) / 2;                                                        \
         w->split = t + diff;                                                          \
         wt->ts.ts.split += diff;                                                      \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->movesplit = 0;                                                            \
         PR_COUNTSPLITS(w, CTR_split_grow);                                            \
     }                                                                                 \
                                                                                       \
-    compiler_barrier();                                                               \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     t = (TD_##NAME *)__dq_head;                                                       \
     t->thief = THIEF_EMPTY;                                                           \
@@ -2601,7 +2604,7 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head , ATYPE_1 arg_1, ATYPE_2 arg_2, AT
     t->f = &NAME##_WRAP;                                                              \
     t->thief = THIEF_TASK;                                                            \
      t->d.args.arg_1 = arg_1; t->d.args.arg_2 = arg_2; t->d.args.arg_3 = arg_3; t->d.args.arg_4 = arg_4; t->d.args.arg_5 = arg_5; t->d.args.arg_6 = arg_6;\
-    compiler_barrier();                                                               \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     Worker *wt = w->_public;                                                          \
     if (unlikely(w->allstolen)) {                                                     \
@@ -2609,7 +2612,7 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head , ATYPE_1 arg_1, ATYPE_2 arg_2, AT
         head = __dq_head - w->dq;                                                     \
         ts = (TailSplit){{head,head+1}};                                              \
         wt->ts.v = ts.v;                                                              \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->allstolen = 0;                                                            \
         w->split = __dq_head+1;                                                       \
         w->allstolen = 0;                                                             \
@@ -2619,7 +2622,7 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head , ATYPE_1 arg_1, ATYPE_2 arg_2, AT
         newsplit = (split + head + 2)/2;                                              \
         wt->ts.ts.split = newsplit;                                                   \
         w->split = w->dq + newsplit;                                                  \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->movesplit = 0;                                                            \
         PR_COUNTSPLITS(w, CTR_split_grow);                                            \
     }                                                                                 \
@@ -2661,7 +2664,7 @@ RTYPE NAME##_SYNC_SLOW(WorkerP *w, Task *__dq_head)                             
         return ((TD_##NAME *)t)->d.res;                                               \
     }                                                                                 \
                                                                                       \
-    compiler_barrier();                                                               \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     Worker *wt = w->_public;                                                          \
     if (wt->movesplit) {                                                              \
@@ -2670,12 +2673,12 @@ RTYPE NAME##_SYNC_SLOW(WorkerP *w, Task *__dq_head)                             
         diff = (diff + 1) / 2;                                                        \
         w->split = t + diff;                                                          \
         wt->ts.ts.split += diff;                                                      \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->movesplit = 0;                                                            \
         PR_COUNTSPLITS(w, CTR_split_grow);                                            \
     }                                                                                 \
                                                                                       \
-    compiler_barrier();                                                               \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     t = (TD_##NAME *)__dq_head;                                                       \
     t->thief = THIEF_EMPTY;                                                           \
@@ -2751,7 +2754,7 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head , ATYPE_1 arg_1, ATYPE_2 arg_2, AT
     t->f = &NAME##_WRAP;                                                              \
     t->thief = THIEF_TASK;                                                            \
      t->d.args.arg_1 = arg_1; t->d.args.arg_2 = arg_2; t->d.args.arg_3 = arg_3; t->d.args.arg_4 = arg_4; t->d.args.arg_5 = arg_5; t->d.args.arg_6 = arg_6;\
-    compiler_barrier();                                                               \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     Worker *wt = w->_public;                                                          \
     if (unlikely(w->allstolen)) {                                                     \
@@ -2759,7 +2762,7 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head , ATYPE_1 arg_1, ATYPE_2 arg_2, AT
         head = __dq_head - w->dq;                                                     \
         ts = (TailSplit){{head,head+1}};                                              \
         wt->ts.v = ts.v;                                                              \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->allstolen = 0;                                                            \
         w->split = __dq_head+1;                                                       \
         w->allstolen = 0;                                                             \
@@ -2769,7 +2772,7 @@ void NAME##_SPAWN(WorkerP *w, Task *__dq_head , ATYPE_1 arg_1, ATYPE_2 arg_2, AT
         newsplit = (split + head + 2)/2;                                              \
         wt->ts.ts.split = newsplit;                                                   \
         w->split = w->dq + newsplit;                                                  \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->movesplit = 0;                                                            \
         PR_COUNTSPLITS(w, CTR_split_grow);                                            \
     }                                                                                 \
@@ -2811,7 +2814,7 @@ void NAME##_SYNC_SLOW(WorkerP *w, Task *__dq_head)                              
         return ;                                                                      \
     }                                                                                 \
                                                                                       \
-    compiler_barrier();                                                               \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     Worker *wt = w->_public;                                                          \
     if (wt->movesplit) {                                                              \
@@ -2820,12 +2823,12 @@ void NAME##_SYNC_SLOW(WorkerP *w, Task *__dq_head)                              
         diff = (diff + 1) / 2;                                                        \
         w->split = t + diff;                                                          \
         wt->ts.ts.split += diff;                                                      \
-        compiler_barrier();                                                           \
+        smp_rmb_barrier();                                                           \
         wt->movesplit = 0;                                                            \
         PR_COUNTSPLITS(w, CTR_split_grow);                                            \
     }                                                                                 \
                                                                                       \
-    compiler_barrier();                                                               \
+    smp_rmb_barrier();                                                               \
                                                                                       \
     t = (TD_##NAME *)__dq_head;                                                       \
     t->thief = THIEF_EMPTY;                                                           \

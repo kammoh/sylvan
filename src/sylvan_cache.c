@@ -29,9 +29,6 @@
 #define CACHE_MASK 1
 #endif
 
-#ifndef compiler_barrier
-#define compiler_barrier() { asm volatile("" ::: "memory"); }
-#endif
 
 #ifndef cas
 #define cas(ptr, old, new) (__sync_bool_compare_and_swap((ptr),(old),(new)))
@@ -124,7 +121,7 @@ cache_get6(uint64_t a, uint64_t b, uint64_t c, uint64_t d, uint64_t e, uint64_t 
     cache6_entry_t bucket = (cache6_entry_t)cache_table + (hash % cache_size)/2;
 #endif
     const uint64_t s = *s_bucket;
-    compiler_barrier();
+    smp_rmb_barrier();
     // abort if locked or second part of 2-part entry or if different hash
     uint64_t x = ((hash>>32) & 0x7fff0000) | 0x04000000;
     x = x | (x<<32);
@@ -134,8 +131,8 @@ cache_get6(uint64_t a, uint64_t b, uint64_t c, uint64_t d, uint64_t e, uint64_t 
     if (bucket->d != d || bucket->e != e || bucket->f != f) return 0;
     *res1 = bucket->res;
     if (res2) *res2 = bucket->res2;
-    compiler_barrier();
-    // abort if status field changed after compiler_barrier()
+    smp_rmb_barrier();
+    // abort if status field changed after smp_rmb_barrier()
     return *s_bucket == s ? 1 : 0;
 }
 
@@ -160,7 +157,7 @@ cache_put6(uint64_t a, uint64_t b, uint64_t c, uint64_t d, uint64_t e, uint64_t 
     new_s |= (s+1)&0xffff;
     // use cas to claim bucket
     if (!cas(s_bucket, s, new_s | 0x8000000080000000LL)) return 0;
-    // cas succesful: write data
+    // cas successful: write data
     bucket->a = a;
     bucket->b = b;
     bucket->c = c;
@@ -169,8 +166,8 @@ cache_put6(uint64_t a, uint64_t b, uint64_t c, uint64_t d, uint64_t e, uint64_t 
     bucket->f = f;
     bucket->res = res1;
     bucket->res2 = res2;
-    compiler_barrier();
-    // after compiler_barrier(), unlock status field
+    smp_rmb_barrier();
+    // after smp_rmb_barrier(), unlock status field
     *s_bucket = new_s;
     return 1;
 }
@@ -187,7 +184,7 @@ cache_get(uint64_t a, uint64_t b, uint64_t c, uint64_t *res)
     cache_entry_t bucket = cache_table + (hash % cache_size);
 #endif
     const uint32_t s = *s_bucket;
-    compiler_barrier();
+    smp_rmb_barrier();
     // abort if locked or if part of a 2-part cache entry
     if (s & 0xc0000000) return 0;
     // abort if different hash
@@ -195,8 +192,8 @@ cache_get(uint64_t a, uint64_t b, uint64_t c, uint64_t *res)
     // abort if key different
     if (bucket->a != a || bucket->b != b || bucket->c != c) return 0;
     *res = bucket->res;
-    compiler_barrier();
-    // abort if status field changed after compiler_barrier()
+    smp_rmb_barrier();
+    // abort if status field changed after smp_rmb_barrier()
     return *s_bucket == s ? 1 : 0;
 }
 
@@ -225,8 +222,8 @@ cache_put(uint64_t a, uint64_t b, uint64_t c, uint64_t res)
     bucket->b = b;
     bucket->c = c;
     bucket->res = res;
-    compiler_barrier();
-    // after compiler_barrier(), unlock status field
+    smp_rmb_barrier();
+    // after smp_rmb_barrier(), unlock status field
     *s_bucket = new_s;
     return 1;
 }

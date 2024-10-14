@@ -23,14 +23,6 @@
 #include <string.h> // for strerror
 #include <sys/mman.h> // for mmap
 
-#ifndef compiler_barrier
-#ifdef __aarch64__
-#define compiler_barrier() { asm volatile("dmb ishld" ::: "memory"); }
-#else
-#define compiler_barrier() { asm volatile("" ::: "memory"); }
-#endif
-#endif
-
 #ifndef cas
 #define cas(ptr, old, new) (__sync_bool_compare_and_swap((ptr),(old),(new)))
 #endif
