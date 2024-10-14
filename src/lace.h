@@ -323,7 +323,7 @@ void lace_yield(WorkerP *__lace_worker, Task *__lace_dq_head);
 
 #ifndef mfence
 #ifdef __aarch64__
-#define mfence() { asm volatile("dmb ish" ::: "memory"); }
+#define mfence() { asm volatile("dsb sy" ::: "memory"); }
 #else
 #define mfence() { asm volatile("mfence" ::: "memory"); }
 #endif
@@ -477,7 +477,7 @@ typedef struct _WorkerP {
 static inline void CHECKSTACK(WorkerP *w)
 {
     if (w->stack_trigger != 0) {
-        register size_t rsp;
+        volatile size_t rsp;
         asm volatile("movq %%rsp, %0" : "+r"(rsp) : : "cc");
         if (rsp < w->stack_trigger) {
             fputs("Warning: program stack 95% used!\n", stderr);
@@ -620,10 +620,10 @@ lace_steal(WorkerP *self, Task *__dq_head, Worker *victim)
            compiler will optimize extra memory accesses to victim->ts instead
            of comparing the local values ts.ts.tail and ts.ts.split, causing
            thieves to steal non existent tasks! */
-        register TailSplit ts;
+        volatile TailSplit ts;
         ts.v = *(volatile uint64_t *)&victim->ts.v;
         if (ts.ts.tail < ts.ts.split) {
-            register TailSplit ts_new;
+            volatile TailSplit ts_new;
             ts_new.v = ts.v;
             ts_new.ts.tail++;
             if (__sync_bool_compare_and_swap(&victim->ts.v, ts.v, ts_new.v)) {
