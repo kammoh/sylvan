@@ -318,7 +318,11 @@ void lace_yield(WorkerP *__lace_worker, Task *__lace_dq_head);
 
 /* Some fences */
 #ifndef compiler_barrier
+#ifdef __aarch64__
+#define compiler_barrier() { asm volatile("dmb ishld" ::: "memory"); }
+#else
 #define compiler_barrier() { asm volatile("" ::: "memory"); }
+#endif
 #endif
 
 #ifndef mfence
